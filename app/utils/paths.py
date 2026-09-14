@@ -18,3 +18,8 @@ def get_cache_db_path() -> Path:
     cache_dir = BASE_DIR / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "translation_cache.db"
+
+def get_models_dir() -> Path:
+    models_dir = BASE_DIR / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return models_dir
