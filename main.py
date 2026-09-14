@@ -1,16 +1,26 @@
-# This is a sample Python script.
+import sys
+import os
+from PySide6.QtWidgets import QApplication
+from app.gui.main_window import MainWindow
+from app.config.settings import settings
+from app.utils.logging import setup_logging, get_logger
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+logger = get_logger(__name__)
 
+def main():
+    setup_logging(settings.log_level)
+    logger.info("Starting English -> Bangla PDF Translator application...")
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+    # Enable high DPI scaling on displays if available
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
+    app = QApplication(sys.argv)
+    app.setApplicationName("English -> Bangla PDF Translator")
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+    window = MainWindow()
+    window.show()
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
