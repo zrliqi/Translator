@@ -9,6 +9,7 @@ from app.pdf.page_parser import PageParser
 from app.pdf.pdf_builder import PDFBuilder
 from app.ocr.ocr_engine import TesseractOCREngine
 from app.translation.openai_translator import OpenAITranslator, MockTranslator
+from app.translation.groq_translator import GroqTranslator
 from app.translation.google_translator import GoogleTranslator
 from app.translation.translation_cache import TranslationCache
 from app.translation.translation_validator import TranslationValidator
@@ -145,6 +146,9 @@ class TranslationWorker(QThread):
                 mm = ModelManager(model_repo=repo_name)
                 translator = LocalTranslator(model_manager=mm, preferred_device=self.local_device)
                 cache_model_name = f"local-{mm.model_folder_name}"
+            elif self.provider in ("groq", "groq translator") or "llama" in self.model_name.lower() or "mixtral" in self.model_name.lower():
+                translator = GroqTranslator(api_key=self.api_key, model=self.model_name)
+                cache_model_name = f"groq-{self.model_name}"
             elif self.provider in ("mock", "mock-translator") or self.model_name == "mock-translator":
                 translator = MockTranslator()
                 cache_model_name = "mock-translator"
