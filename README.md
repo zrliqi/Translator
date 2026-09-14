@@ -22,7 +22,7 @@ A production-quality Python PySide6 desktop application for translating English 
 
 ## Key Features
 
-- **Multiple Translation Providers**: Supports OpenAI (`gpt-4o`, `gpt-4o-mini`), official Google Cloud Translation API (`en` → `bn`), and offline `mock-translator`.
+- **Multiple Translation Providers**: Supports OpenAI (`gpt-4o`, `gpt-4o-mini`), **Local AI Translator** (Meta NLLB-200 local model - 100% free, offline, no API key), official Google Cloud Translation API (`en` → `bn`), and offline `mock-translator`.
 - **Document Analysis & Detection**: Automatically counts pages, measures text density, and detects scanned/image vs. selectable text pages.
 - **Structure Preservation**: Preserves paragraph flow, story headings, page numbers, margins, images, and visual hierarchy.
 - **Natural Bengali Typography**: Uses embedded `Noto Sans Bengali` / `Noto Serif Bengali` fonts with MuPDF HTML shaping engine to ensure flawless rendering of Bengali complex scripts, conjuncts (যুক্তাক্ষর), and vowel signs (কার).
@@ -61,6 +61,8 @@ app/
 │   ├── translator.py           # Abstract Base Translator Interface
 │   ├── openai_translator.py    # Official OpenAI SDK & Mock Translators
 │   ├── google_translator.py    # Official Google Cloud Translation API Provider
+│   ├── local_translator.py     # Local AI NLLB-200 Multilingual Model Translator
+│   ├── model_manager.py        # Model Download, Device Placement & RAM/VRAM Lifecycle Manager
 │   ├── translation_cache.py    # SQLite SHA-256 Translation Cache
 │   ├── translation_validator.py# Bengali Unicode & Integrity Validator
 │   └── prompts.py              # Literary Bangla Translation Prompts
@@ -123,6 +125,24 @@ GOOGLE_PROJECT_ID=your-google-project-id
 GOOGLE_CREDENTIALS_PATH=/path/to/your/service_account_credentials.json
 ```
 *Note: You can also enter or override credentials directly within the GUI setting fields.*
+
+---
+
+## Local AI Translator Setup & Model Management
+
+The **Local AI Translator** option allows you to translate English PDFs into Bangla **completely locally** on your computer without any cloud service, API key, credit card, or web scraping.
+
+### Features:
+- **Model**: Meta NLLB-200 (`facebook/nllb-200-distilled-600M`).
+- **No API Key or Internet Required**: Runs 100% offline once downloaded.
+- **Hardware Acceleration**: Automatically selects CUDA GPU if available and supported, otherwise seamlessly uses CPU.
+- **Model Storage**: Saved in the `models/` directory inside the application folder using `pathlib`.
+- **First-Run Download**: The model (~2.4 GB) is downloaded only when requested via the GUI `[ Download Model ]` button or when starting a job with the provider selected for the first time.
+
+### Device Selection Options:
+- `auto`: Uses CUDA if an NVIDIA GPU is available, otherwise CPU.
+- `cpu`: Forces translation on CPU.
+- `cuda`: Forces translation on CUDA GPU (falls back to CPU if unavailable or out-of-memory).
 
 ---
 

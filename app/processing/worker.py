@@ -32,6 +32,7 @@ class TranslationWorker(QThread):
         api_key: str = "",
         google_project_id: str = "",
         google_credentials_path: str = "",
+        local_device: str = "auto",
         font_name: str = "Noto Sans Bengali",
         page_limit: int = 0,
         preserve_headings: bool = True,
@@ -50,6 +51,7 @@ class TranslationWorker(QThread):
         self.api_key = api_key
         self.google_project_id = google_project_id
         self.google_credentials_path = google_credentials_path
+        self.local_device = local_device
         self.font_name = font_name
         self.page_limit = page_limit
         self.preserve_headings = preserve_headings
@@ -136,6 +138,13 @@ class TranslationWorker(QThread):
                     credentials_path=self.google_credentials_path
                 )
                 cache_model_name = "google-cloud-translate"
+            elif self.provider in ("local", "local ai translator") or "nllb" in self.model_name.lower():
+                from app.translation.local_translator import LocalTranslator
+                from app.translation.model_manager import ModelManager
+                repo_name = self.model_name if "nllb" in self.model_name.lower() else settings.local_model
+                mm = ModelManager(model_repo=repo_name)
+                translator = LocalTranslator(model_manager=mm, preferred_device=self.local_device)
+                cache_model_name = f"local-{mm.model_folder_name}"
             elif self.provider in ("mock", "mock-translator") or self.model_name == "mock-translator":
                 translator = MockTranslator()
                 cache_model_name = "mock-translator"

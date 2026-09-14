@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 
 from app.config.settings import settings
 from app.fonts.font_manager import FontManager
+from app.translation.model_manager import ModelManager
 from app.utils.paths import get_output_dir
 from app.utils.logging import get_logger
 from app.gui.styles.theme import STYLE_SHEET
@@ -17,6 +18,25 @@ from app.gui.widgets.preview_widget import SideBySidePreviewWidget
 from app.gui.dialogs.report_dialog import ReportDialog
 
 logger = get_logger(__name__)
+
+class ModelDownloadWorker(QThread):
+    progress_updated = Signal(int, str)
+    download_finished = Signal(bool, str)
+
+    def __init__(self, model_manager: ModelManager, parent=None):
+        super().__init__(parent)
+        self.model_manager = model_manager
+
+    def run(self):
+        try:
+            def cb(pct, msg):
+                self.progress_updated.emit(pct, msg)
+
+            self.model_manager.download_model(progress_callback=cb)
+            self.download_finished.emit(True, "Model downloaded and verified successfully!")
+        except Exception as e:
+            logger.error(f"Model download error: {e}")
+            self.download_finished.emit(False, str(e))
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -28,6 +48,8 @@ class MainWindow(QMainWindow):
         self.input_pdf_path: Path = None
         self.analyzed_doc = None
         self.worker_thread: QThread = None
+        self.model_manager = ModelManager(model_repo=settings.local_model)
+        self.download_worker: QThread = None
 
         self._init_ui()
 
@@ -86,7 +108,7 @@ class MainWindow(QMainWindow):
 
         # Provider Selector
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["OpenAI", "Google Cloud Translation", "Mock Translator"])
+        self.provider_combo.addItems(["OpenAI", "Local AI Translator", "Google Cloud Translation", "Mock Translator"])
         lang_layout.addRow("Translation Provider:", self.provider_combo)
 
         # OpenAI Container Widget
@@ -106,6 +128,28 @@ class MainWindow(QMainWindow):
         openai_layout.addRow("API Key:", self.api_key_edit)
 
         lang_layout.addRow(self.openai_container)
+
+        # Local AI Translator Container Widget
+        self.local_container = QWidget()
+        local_layout = QFormLayout(self.local_container)
+        local_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.local_model_lbl = QLabel("Meta NLLB-200 (distilled-600M)")
+        local_layout.addRow("Local Model:", self.local_model_lbl)
+
+        self.local_device_combo = QComboBox()
+        self.local_device_combo.addItems(["auto", "cpu", "cuda"])
+        self.local_device_combo.setCurrentText(settings.local_device)
+        local_layout.addRow("Hardware Device:", self.local_device_combo)
+
+        self.local_status_lbl = QLabel("Checking status...")
+        local_layout.addRow("Status:", self.local_status_lbl)
+
+        self.download_model_btn = QPushButton("Download Model")
+        self.download_model_btn.clicked.connect(self._on_download_model)
+        local_layout.addRow("Model Management:", self.download_model_btn)
+
+        lang_layout.addRow(self.local_container)
 
         # Google Cloud Translation Container Widget
         self.google_container = QWidget()
@@ -140,6 +184,8 @@ class MainWindow(QMainWindow):
         # Set initial provider selection
         if settings.translation_provider.lower() in ["google", "google cloud translation"]:
             self.provider_combo.setCurrentText("Google Cloud Translation")
+        elif settings.translation_provider.lower() in ["local", "local ai translator"]:
+            self.provider_combo.setCurrentText("Local AI Translator")
         elif settings.translation_provider.lower() in ["mock", "mock-translator"]:
             self.provider_combo.setCurrentText("Mock Translator")
         else:
@@ -244,13 +290,59 @@ class MainWindow(QMainWindow):
     def _on_provider_changed(self, provider_text: str):
         if provider_text == "OpenAI":
             self.openai_container.setVisible(True)
+            self.local_container.setVisible(False)
             self.google_container.setVisible(False)
+        elif provider_text == "Local AI Translator":
+            self.openai_container.setVisible(False)
+            self.local_container.setVisible(True)
+            self.google_container.setVisible(False)
+            self._update_local_status()
         elif provider_text == "Google Cloud Translation":
             self.openai_container.setVisible(False)
+            self.local_container.setVisible(False)
             self.google_container.setVisible(True)
         else: # Mock Translator
             self.openai_container.setVisible(False)
+            self.local_container.setVisible(False)
             self.google_container.setVisible(False)
+
+    def _update_local_status(self):
+        if self.model_manager.is_model_installed():
+            size_mb = self.model_manager.get_model_size_mb()
+            self.local_status_lbl.setText(f"✓ Ready ({size_mb:.1f} MB)")
+            self.download_model_btn.setText("Re-download / Verify Model")
+        else:
+            self.local_status_lbl.setText("Status: Not Installed")
+            self.download_model_btn.setText("Download Model")
+
+    def _on_download_model(self):
+        if self.download_worker and self.download_worker.isRunning():
+            QMessageBox.information(self, "Download in Progress", "Model download is already in progress.")
+            return
+
+        self.download_model_btn.setEnabled(False)
+        self.status_lbl.setText("Downloading translation model...")
+
+        self.download_worker = ModelDownloadWorker(self.model_manager, self)
+        self.download_worker.progress_updated.connect(self._on_download_progress)
+        self.download_worker.download_finished.connect(self._on_download_finished)
+        self.download_worker.start()
+
+    def _on_download_progress(self, pct: int, msg: str):
+        self.progress_bar.setValue(pct)
+        self.status_lbl.setText(msg)
+        self.local_status_lbl.setText(f"Downloading... ({pct}%)")
+
+    def _on_download_finished(self, success: bool, msg: str):
+        self.download_model_btn.setEnabled(True)
+        self._update_local_status()
+        if success:
+            self.progress_bar.setValue(100)
+            self.status_lbl.setText("Local translation model is ready.")
+            QMessageBox.information(self, "Download Complete", msg)
+        else:
+            self.status_lbl.setText(f"Download failed: {msg}")
+            QMessageBox.critical(self, "Download Error", f"Failed to download model:\n{msg}")
 
     def _on_browse_google_cred(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -340,6 +432,20 @@ class MainWindow(QMainWindow):
             if not api_key:
                 QMessageBox.warning(self, "API Key Missing", "Please enter an OpenAI API key.")
                 return
+        elif provider_text == "Local AI Translator":
+            provider = "local"
+            model_name = settings.local_model
+            if not self.model_manager.is_model_installed():
+                reply = QMessageBox.question(
+                    self,
+                    "Model Not Installed",
+                    "Local translation model is not installed.\n\n"
+                    "Download the model now to enable offline English → Bangla translation?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    self._on_download_model()
+                return
         elif provider_text == "Google Cloud Translation":
             provider = "google"
             model_name = "google-cloud-translate"
@@ -358,6 +464,7 @@ class MainWindow(QMainWindow):
             api_key=api_key,
             google_project_id=google_proj,
             google_credentials_path=google_cred,
+            local_device=self.local_device_combo.currentText(),
             font_name=self.font_combo.currentText(),
             page_limit=self.page_limit_spin.value(),
             preserve_headings=self.chk_headings.isChecked(),
