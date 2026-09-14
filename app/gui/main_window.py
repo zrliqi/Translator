@@ -84,16 +84,67 @@ class MainWindow(QMainWindow):
         lang_layout.addRow("Source Language:", self.src_lang_lbl)
         lang_layout.addRow("Target Language:", self.tgt_lang_lbl)
 
+        # Provider Selector
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["OpenAI", "Google Cloud Translation", "Mock Translator"])
+        lang_layout.addRow("Translation Provider:", self.provider_combo)
+
+        # OpenAI Container Widget
+        self.openai_container = QWidget()
+        openai_layout = QFormLayout(self.openai_container)
+        openai_layout.setContentsMargins(0, 0, 0, 0)
+
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["gpt-4o-mini", "gpt-4o", "mock-translator"])
-        self.model_combo.setCurrentText(settings.openai_model)
-        lang_layout.addRow("Translation Model:", self.model_combo)
+        self.model_combo.addItems(["gpt-4o-mini", "gpt-4o"])
+        self.model_combo.setCurrentText(settings.openai_model if settings.openai_model in ["gpt-4o-mini", "gpt-4o"] else "gpt-4o-mini")
+        openai_layout.addRow("Translation Model:", self.model_combo)
 
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
         self.api_key_edit.setPlaceholderText("Loaded from .env if left empty")
         self.api_key_edit.setText(settings.openai_api_key)
-        lang_layout.addRow("API Key:", self.api_key_edit)
+        openai_layout.addRow("API Key:", self.api_key_edit)
+
+        lang_layout.addRow(self.openai_container)
+
+        # Google Cloud Translation Container Widget
+        self.google_container = QWidget()
+        google_layout = QFormLayout(self.google_container)
+        google_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.google_project_edit = QLineEdit()
+        self.google_project_edit.setPlaceholderText("Optional if in credentials JSON")
+        self.google_project_edit.setText(settings.google_project_id)
+        google_layout.addRow("Google Project ID:", self.google_project_edit)
+
+        google_cred_picker_layout = QHBoxLayout()
+        self.google_cred_edit = QLineEdit()
+        self.google_cred_edit.setPlaceholderText("Path to service account JSON file")
+        self.google_cred_edit.setText(settings.google_credentials_path)
+        self.google_cred_browse_btn = QPushButton("Browse...")
+        self.google_cred_browse_btn.clicked.connect(self._on_browse_google_cred)
+        google_cred_picker_layout.addWidget(self.google_cred_edit)
+        google_cred_picker_layout.addWidget(self.google_cred_browse_btn)
+
+        google_layout.addRow("Google Credentials:", google_cred_picker_layout)
+
+        self.test_conn_btn = QPushButton("Test Google Connection")
+        self.test_conn_btn.clicked.connect(self._on_test_google_connection)
+        google_layout.addRow("Connection Test:", self.test_conn_btn)
+
+        lang_layout.addRow(self.google_container)
+
+        # Connect Provider Change Signal
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+
+        # Set initial provider selection
+        if settings.translation_provider.lower() in ["google", "google cloud translation"]:
+            self.provider_combo.setCurrentText("Google Cloud Translation")
+        elif settings.translation_provider.lower() in ["mock", "mock-translator"]:
+            self.provider_combo.setCurrentText("Mock Translator")
+        else:
+            self.provider_combo.setCurrentText("OpenAI")
+        self._on_provider_changed(self.provider_combo.currentText())
 
         self.font_combo = QComboBox()
         available_fonts = FontManager.get_instance().list_available_fonts()
@@ -190,6 +241,40 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.tabs)
 
+    def _on_provider_changed(self, provider_text: str):
+        if provider_text == "OpenAI":
+            self.openai_container.setVisible(True)
+            self.google_container.setVisible(False)
+        elif provider_text == "Google Cloud Translation":
+            self.openai_container.setVisible(False)
+            self.google_container.setVisible(True)
+        else: # Mock Translator
+            self.openai_container.setVisible(False)
+            self.google_container.setVisible(False)
+
+    def _on_browse_google_cred(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Google Service Account JSON Key",
+            "",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if file_path:
+            self.google_cred_edit.setText(file_path)
+
+    def _on_test_google_connection(self):
+        project_id = self.google_project_edit.text().strip()
+        credentials_path = self.google_cred_edit.text().strip()
+
+        from app.translation.google_translator import GoogleTranslator
+        translator = GoogleTranslator(project_id=project_id, credentials_path=credentials_path)
+
+        success, msg = translator.validate_connection()
+        if success:
+            QMessageBox.information(self, "Google Connection Test", msg)
+        else:
+            QMessageBox.warning(self, "Google Connection Failed", msg)
+
     def _on_browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Input English PDF", "", "PDF Files (*.pdf)")
         if file_path:
@@ -244,18 +329,35 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please analyze the PDF first.")
             return
 
+        provider_text = self.provider_combo.currentText()
         api_key = self.api_key_edit.text().strip()
         model_name = self.model_combo.currentText()
+        google_proj = self.google_project_edit.text().strip()
+        google_cred = self.google_cred_edit.text().strip()
 
-        if model_name != "mock-translator" and not api_key:
-            QMessageBox.warning(self, "API Key Missing", "Please enter an OpenAI API key or select 'mock-translator' model.")
-            return
+        if provider_text == "OpenAI":
+            provider = "openai"
+            if not api_key:
+                QMessageBox.warning(self, "API Key Missing", "Please enter an OpenAI API key.")
+                return
+        elif provider_text == "Google Cloud Translation":
+            provider = "google"
+            model_name = "google-cloud-translate"
+            if google_cred and not Path(google_cred).exists():
+                QMessageBox.warning(self, "Credentials Error", f"Google credentials file not found: {google_cred}")
+                return
+        else: # Mock Translator
+            provider = "mock"
+            model_name = "mock-translator"
 
         from app.processing.worker import TranslationWorker
         self.worker = TranslationWorker(
             input_path=self.input_pdf_path,
+            provider=provider,
             model_name=model_name,
             api_key=api_key,
+            google_project_id=google_proj,
+            google_credentials_path=google_cred,
             font_name=self.font_combo.currentText(),
             page_limit=self.page_limit_spin.value(),
             preserve_headings=self.chk_headings.isChecked(),

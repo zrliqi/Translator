@@ -16,3 +16,6 @@ test_page_flow.png
 .env
 venv/
 .pytest_cache/
+*credentials*.json
+google_credentials.json
+*.json.key
