@@ -7,8 +7,11 @@ load_dotenv()
 
 @dataclass
 class Settings:
+    translation_provider: str = field(default_factory=lambda: os.getenv("TRANSLATION_PROVIDER", "openai"))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     openai_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    google_project_id: str = field(default_factory=lambda: os.getenv("GOOGLE_PROJECT_ID", ""))
+    google_credentials_path: str = field(default_factory=lambda: os.getenv("GOOGLE_CREDENTIALS_PATH", os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")))
     batch_size: int = 10
     max_batch_chars: int = 3000
     retry_count: int = 3
@@ -26,7 +29,10 @@ class Settings:
 
     def reload_env(self):
         load_dotenv(override=True)
+        self.translation_provider = os.getenv("TRANSLATION_PROVIDER", self.translation_provider)
         self.openai_api_key = os.getenv("OPENAI_API_KEY", self.openai_api_key)
         self.openai_model = os.getenv("OPENAI_MODEL", self.openai_model)
+        self.google_project_id = os.getenv("GOOGLE_PROJECT_ID", self.google_project_id)
+        self.google_credentials_path = os.getenv("GOOGLE_CREDENTIALS_PATH", os.getenv("GOOGLE_APPLICATION_CREDENTIALS", self.google_credentials_path))
 
 settings = Settings()
