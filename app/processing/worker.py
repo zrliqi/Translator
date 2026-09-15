@@ -35,6 +35,7 @@ class TranslationWorker(QThread):
         google_credentials_path: str = "",
         local_device: str = "auto",
         font_name: str = "Noto Sans Bengali",
+        selected_pages: Optional[list] = None,
         page_limit: int = 0,
         preserve_headings: bool = True,
         preserve_paragraphs: bool = True,
@@ -54,6 +55,7 @@ class TranslationWorker(QThread):
         self.google_credentials_path = google_credentials_path
         self.local_device = local_device
         self.font_name = font_name
+        self.selected_pages = selected_pages
         self.page_limit = page_limit
         self.preserve_headings = preserve_headings
         self.preserve_paragraphs = preserve_paragraphs
@@ -82,7 +84,11 @@ class TranslationWorker(QThread):
             extractor = TextExtractor(extract_images=self.preserve_images)
             doc_model = extractor.extract_document(self.input_path)
 
-            if self.page_limit > 0:
+            if self.selected_pages is not None:
+                selected_set = set(self.selected_pages)
+                doc_model.pages = [p for p in doc_model.pages if p.page_num in selected_set]
+                doc_model.total_pages = len(doc_model.pages)
+            elif self.page_limit > 0:
                 doc_model.pages = doc_model.pages[:self.page_limit]
                 doc_model.total_pages = len(doc_model.pages)
 
@@ -104,10 +110,10 @@ class TranslationWorker(QThread):
                 if page.needs_ocr or page.is_scanned:
                     if ocr_engine and ocr_engine.is_available():
                         try:
-                            # Render page image for OCR
+                            # Render page image for OCR using 0-based page index (page.page_num - 1)
                             import pymupdf
                             doc = pymupdf.open(str(self.input_path))
-                            p = doc[idx]
+                            p = doc[page.page_num - 1]
                             pix = p.get_pixmap()
                             img_bytes = pix.tobytes("png")
                             ocr_text = ocr_engine.extract_text_from_image(img_bytes, lang="eng")
