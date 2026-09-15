@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 from app.config.settings import settings
 from app.fonts.font_manager import FontManager
 from app.translation.model_manager import ModelManager
+from app.utils.page_selection import PageSelection, PageSelectionMode
 from app.utils.paths import get_output_dir
 from app.utils.logging import get_logger
 from app.gui.styles.theme import STYLE_SHEET
@@ -226,12 +227,48 @@ class MainWindow(QMainWindow):
             self.font_combo.setCurrentText(settings.default_font)
         lang_layout.addRow("Bangla Font:", self.font_combo)
 
-        # Test Mode (Limit pages)
-        self.page_limit_spin = QSpinBox()
-        self.page_limit_spin.setRange(0, 1000)
-        self.page_limit_spin.setValue(0)
-        self.page_limit_spin.setSpecialValueText("All Pages")
-        lang_layout.addRow("Test Mode (Pages):", self.page_limit_spin)
+        # Translation Pages Selection
+        self.page_mode_combo = QComboBox()
+        self.page_mode_combo.addItems(["All Pages", "Page Range", "Specific Pages"])
+
+        self.page_range_container = QWidget()
+        page_range_layout = QHBoxLayout(self.page_range_container)
+        page_range_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.page_from_spin = QSpinBox()
+        self.page_from_spin.setRange(1, 9999)
+        self.page_from_spin.setValue(1)
+
+        self.page_to_spin = QSpinBox()
+        self.page_to_spin.setRange(1, 9999)
+        self.page_to_spin.setValue(1)
+
+        page_range_layout.addWidget(QLabel("From:"))
+        page_range_layout.addWidget(self.page_from_spin)
+        page_range_layout.addWidget(QLabel("To:"))
+        page_range_layout.addWidget(self.page_to_spin)
+
+        self.page_specific_container = QWidget()
+        page_specific_layout = QHBoxLayout(self.page_specific_container)
+        page_specific_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.page_specific_edit = QLineEdit()
+        self.page_specific_edit.setPlaceholderText("e.g. 5, 9-11, 20")
+
+        page_specific_layout.addWidget(QLabel("Pages:"))
+        page_specific_layout.addWidget(self.page_specific_edit)
+
+        page_selection_widget = QWidget()
+        page_selection_layout = QVBoxLayout(page_selection_widget)
+        page_selection_layout.setContentsMargins(0, 0, 0, 0)
+        page_selection_layout.addWidget(self.page_mode_combo)
+        page_selection_layout.addWidget(self.page_range_container)
+        page_selection_layout.addWidget(self.page_specific_container)
+
+        self.page_mode_combo.currentTextChanged.connect(self._on_page_mode_changed)
+        self._on_page_mode_changed(self.page_mode_combo.currentText())
+
+        lang_layout.addRow("Translation Pages:", page_selection_widget)
 
         settings_hbox.addWidget(lang_group)
 
@@ -313,6 +350,33 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.preview_widget, "Side-by-Side Preview")
 
         main_layout.addWidget(self.tabs)
+
+    def _on_page_mode_changed(self, mode_text: str):
+        if mode_text == "Page Range":
+            self.page_range_container.setVisible(True)
+            self.page_specific_container.setVisible(False)
+        elif mode_text == "Specific Pages":
+            self.page_range_container.setVisible(False)
+            self.page_specific_container.setVisible(True)
+        else:  # All Pages
+            self.page_range_container.setVisible(False)
+            self.page_specific_container.setVisible(False)
+
+    def _get_page_selection(self) -> PageSelection:
+        mode_text = self.page_mode_combo.currentText()
+        if mode_text == "Page Range":
+            mode = PageSelectionMode.RANGE
+        elif mode_text == "Specific Pages":
+            mode = PageSelectionMode.SPECIFIC
+        else:
+            mode = PageSelectionMode.ALL
+
+        return PageSelection(
+            mode=mode,
+            range_from=self.page_from_spin.value(),
+            range_to=self.page_to_spin.value(),
+            specific_input=self.page_specific_edit.text()
+        )
 
     def _on_provider_changed(self, provider_text: str):
         if provider_text == "OpenAI":
@@ -504,6 +568,15 @@ class MainWindow(QMainWindow):
             provider = "mock"
             model_name = "mock-translator"
 
+        page_selection = self._get_page_selection()
+        total_pdf_pages = self.analyzed_doc.total_pages
+        is_valid, err_msg = page_selection.validate(total_pdf_pages)
+        if not is_valid:
+            QMessageBox.warning(self, "Invalid Page Selection", err_msg)
+            return
+
+        selected_pages = page_selection.get_selected_pages(total_pdf_pages)
+
         from app.processing.worker import TranslationWorker
         self.worker = TranslationWorker(
             input_path=self.input_pdf_path,
@@ -514,7 +587,7 @@ class MainWindow(QMainWindow):
             google_credentials_path=google_cred,
             local_device=self.local_device_combo.currentText(),
             font_name=self.font_combo.currentText(),
-            page_limit=self.page_limit_spin.value(),
+            selected_pages=selected_pages,
             preserve_headings=self.chk_headings.isChecked(),
             preserve_paragraphs=self.chk_paragraphs.isChecked(),
             preserve_page_numbers=self.chk_page_nums.isChecked(),
