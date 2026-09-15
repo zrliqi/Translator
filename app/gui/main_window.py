@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QLineEdit, QPushButton, QCheckBox, QComboBox, QProgressBar, QTabWidget,
@@ -9,14 +10,19 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 
 from app.config.settings import settings
+from app.book.book_model import BookModel, BookStatus
+from app.document.paragraph_model import ParagraphModel
 from app.fonts.font_manager import FontManager
 from app.translation.model_manager import ModelManager
 from app.utils.page_selection import PageSelection, PageSelectionMode
 from app.utils.paths import get_output_dir
 from app.utils.logging import get_logger
 from app.gui.styles.theme import STYLE_SHEET
+from app.gui.widgets.book_widget import BookWidget
 from app.gui.widgets.preview_widget import SideBySidePreviewWidget
 from app.gui.dialogs.report_dialog import ReportDialog
+from app.processing.pipeline import JobManager, JobState
+from app.pdf.pdf_builder import PDFBuilder
 
 logger = get_logger(__name__)
 
@@ -42,12 +48,14 @@ class ModelDownloadWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("English → Bangla PDF Translator")
-        self.resize(950, 750)
+        self.setWindowTitle("English → Bangla PDF Translator & Publishing Workbench")
+        self.resize(1024, 800)
         self.setStyleSheet(STYLE_SHEET)
 
+        self.active_book: Optional[BookModel] = None
         self.input_pdf_path: Path = None
         self.analyzed_doc = None
+        self.job_manager = JobManager()
         self.worker_thread: QThread = None
         self.model_manager = ModelManager(model_repo=settings.local_model)
         self.download_worker: QThread = None
@@ -59,21 +67,32 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
 
-        # Tab Widget for Main App vs Preview
+        # Tab Widget for Books, Translation Job, Side-by-Side Review
         self.tabs = QTabWidget()
 
-        # Main Tab
+        # Tab 1: Books (Central Book Library & Publishing Hub)
+        self.book_widget = BookWidget()
+        self.book_widget.open_translation_job.connect(self._on_book_open_translation_job)
+        self.book_widget.open_human_review.connect(self._on_book_open_human_review)
+        self.tabs.addTab(self.book_widget, "Books")
+
+        # Tab 2: Translation Job Tab
         main_tab = QWidget()
         main_tab_layout = QVBoxLayout(main_tab)
 
         # Header
         header_layout = QVBoxLayout()
-        title_lbl = QLabel("<h1>English → Bangla PDF Translator</h1>")
-        subtitle_lbl = QLabel("Translate English PDF documents into properly formatted Unicode Bangla PDFs.")
+        title_lbl = QLabel("<h1>Translation Job Workbench</h1>")
+        subtitle_lbl = QLabel("Configure AI translation options and process English PDFs into Bangla.")
         subtitle_lbl.setStyleSheet("color: #555555; margin-bottom: 10px;")
         header_layout.addWidget(title_lbl)
         header_layout.addWidget(subtitle_lbl)
         main_tab_layout.addLayout(header_layout)
+
+        # Active Book Banner
+        self.active_book_lbl = QLabel("Active Book: [None Selected - Select or create a book in Books tab]")
+        self.active_book_lbl.setStyleSheet("padding: 6px; background-color: #e2e8f0; font-weight: bold;")
+        main_tab_layout.addWidget(self.active_book_lbl)
 
         # Input Section
         input_group = QGroupBox("INPUT SECTION")
@@ -345,11 +364,81 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(main_tab, "Translation Job")
 
-        # Preview Tab
+        # Tab 3: Side-by-Side Review Workbench
         self.preview_widget = SideBySidePreviewWidget()
-        self.tabs.addTab(self.preview_widget, "Side-by-Side Preview")
+        self.preview_widget.units_updated.connect(self._on_units_updated)
+        self.tabs.addTab(self.preview_widget, "Side-by-Side Review")
 
         main_layout.addWidget(self.tabs)
+
+    def _on_units_updated(self):
+        """Persists human edits and rebuilds output PDF with human corrections."""
+        if not self.input_pdf_path or not self.analyzed_doc:
+            return
+
+        job = self.job_manager.find_job_by_path(str(self.input_pdf_path))
+        all_paras = self.analyzed_doc.get_all_paragraphs()
+
+        if job:
+            for p in all_paras:
+                job.units_map[p.id] = p.to_dict()
+                job.translated_map[p.id] = p.current_translation
+            self.job_manager.save_job(job)
+
+        # Rebuild output PDF with current human edits
+        try:
+            builder = PDFBuilder(font_name=self.font_combo.currentText())
+            stem = self.input_pdf_path.stem
+            out_file = get_output_dir() / f"{stem}_Bangla.pdf"
+            builder.build_pdf(
+                self.analyzed_doc,
+                output_path=out_file,
+                preserve_images=self.chk_images.isChecked(),
+                preserve_page_numbers=self.chk_page_nums.isChecked(),
+                keep_page_breaks=self.chk_page_breaks.isChecked()
+            )
+            logger.info(f"Rebuilt output PDF with human edits at: {out_file}")
+        except Exception as e:
+            logger.error(f"Failed rebuilding PDF with human edits: {e}")
+
+    def _on_book_open_translation_job(self, book: BookModel):
+        self.active_book = book
+        self.active_book_lbl.setText(f"Active Book: {book.title} (Author: {book.author} | Translator: {book.translator or 'Unassigned'})")
+        if book.source_pdf_path and Path(book.source_pdf_path).exists():
+            self.input_pdf_path = Path(book.source_pdf_path)
+            self.file_path_edit.setText(str(self.input_pdf_path))
+            self.file_info_lbl.setText(f"File: {self.input_pdf_path.name} | Status: Selected from Book Record")
+            self.analyze_btn.setEnabled(True)
+
+        self.tabs.setCurrentIndex(1) # Switch to Translation Job tab
+
+    def _on_book_open_human_review(self, book: BookModel):
+        self.active_book = book
+        if not self.analyzed_doc or self.input_pdf_path != Path(book.source_pdf_path):
+            if book.source_pdf_path and Path(book.source_pdf_path).exists():
+                self.input_pdf_path = Path(book.source_pdf_path)
+                self.file_path_edit.setText(str(self.input_pdf_path))
+                self._on_analyze_pdf()
+
+        # Restore saved job state and units map into analyzed doc
+        job = self.job_manager.find_job_by_path(str(self.input_pdf_path))
+        all_paras = self.analyzed_doc.get_all_paragraphs() if self.analyzed_doc else []
+
+        if job and job.units_map:
+            for p in all_paras:
+                if p.id in job.units_map:
+                    data = job.units_map[p.id]
+                    p.ai_translation = data.get("ai_translation")
+                    p.human_translation = data.get("human_translation")
+                    p.review_status = data.get("review_status", "AI Translated")
+                    p.revisions = data.get("revisions", [])
+                    p.comments = data.get("comments", [])
+                    p.ai_recheck_status = data.get("ai_recheck_status")
+                    p.ai_recheck_feedback = data.get("ai_recheck_feedback")
+                    p.translated_text = p.current_translation
+
+        self.preview_widget.load_paragraphs(all_paras)
+        self.tabs.setCurrentIndex(2) # Switch to Side-by-Side Review tab
 
     def _on_page_mode_changed(self, mode_text: str):
         if mode_text == "Page Range":
@@ -506,8 +595,23 @@ class MainWindow(QMainWindow):
                 f"File: {res.file_path.name} ({size_mb:.2f} MB) | Pages: {res.total_pages} | Type: {pdf_type} | Analysis Complete"
             )
 
-            # Load into side-by-side preview tab
+            # Check if saved job units exist and restore them
+            job = self.job_manager.find_job_by_path(str(self.input_pdf_path))
             all_paras = self.analyzed_doc.get_all_paragraphs()
+            if job and job.units_map:
+                for p in all_paras:
+                    if p.id in job.units_map:
+                        data = job.units_map[p.id]
+                        p.ai_translation = data.get("ai_translation")
+                        p.human_translation = data.get("human_translation")
+                        p.review_status = data.get("review_status", "AI Translated")
+                        p.revisions = data.get("revisions", [])
+                        p.comments = data.get("comments", [])
+                        p.ai_recheck_status = data.get("ai_recheck_status")
+                        p.ai_recheck_feedback = data.get("ai_recheck_feedback")
+                        p.translated_text = p.current_translation
+
+            # Load into side-by-side preview tab
             self.preview_widget.load_paragraphs(all_paras)
 
             self.status_lbl.setText("Analysis completed successfully. Ready to translate.")
@@ -577,6 +681,12 @@ class MainWindow(QMainWindow):
 
         selected_pages = page_selection.get_selected_pages(total_pdf_pages)
 
+        # Update active book translation status if book selected
+        if self.active_book:
+            self.active_book.translation_status = BookStatus.AI_TRANSLATING
+            self.book_widget.book_manager.save_book(self.active_book)
+            self.book_widget.refresh_book_list()
+
         from app.processing.worker import TranslationWorker
         self.worker = TranslationWorker(
             input_path=self.input_pdf_path,
@@ -620,6 +730,13 @@ class MainWindow(QMainWindow):
         self.translate_btn.setEnabled(True)
         self.analyze_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+
+        # Update active book status
+        if self.active_book:
+            self.active_book.translation_status = BookStatus.AI_TRANSLATED
+            self.active_book.review_status = BookStatus.NEEDS_HUMAN_REVIEW
+            self.book_widget.book_manager.save_book(self.active_book)
+            self.book_widget.refresh_book_list()
 
         # Update preview with translated text
         all_paras = self.analyzed_doc.get_all_paragraphs()
