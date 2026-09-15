@@ -108,8 +108,33 @@ class MainWindow(QMainWindow):
 
         # Provider Selector
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["OpenAI", "Local AI Translator", "Google Cloud Translation", "Mock Translator"])
+        self.provider_combo.addItems(["OpenAI", "Groq", "Local AI Translator", "Google Cloud Translation", "Mock Translator"])
         lang_layout.addRow("Translation Provider:", self.provider_combo)
+
+        # Groq Container Widget
+        self.groq_container = QWidget()
+        groq_layout = QFormLayout(self.groq_container)
+        groq_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.groq_model_combo = QComboBox()
+        self.groq_model_combo.addItems([
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768"
+        ])
+        if settings.groq_model in [self.groq_model_combo.itemText(i) for i in range(self.groq_model_combo.count())]:
+            self.groq_model_combo.setCurrentText(settings.groq_model)
+        else:
+            self.groq_model_combo.setCurrentText("llama-3.3-70b-versatile")
+        groq_layout.addRow("Groq Model:", self.groq_model_combo)
+
+        self.groq_key_info_lbl = QLabel("Loaded from GROQ_API_KEY in .env")
+        self.groq_key_info_lbl.setStyleSheet("color: #666666;")
+        groq_layout.addRow("API Key:", self.groq_key_info_lbl)
+
+        lang_layout.addRow(self.groq_container)
 
         # OpenAI Container Widget
         self.openai_container = QWidget()
@@ -182,7 +207,9 @@ class MainWindow(QMainWindow):
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
 
         # Set initial provider selection
-        if settings.translation_provider.lower() in ["google", "google cloud translation"]:
+        if settings.translation_provider.lower() in ["groq", "groq translator"]:
+            self.provider_combo.setCurrentText("Groq")
+        elif settings.translation_provider.lower() in ["google", "google cloud translation"]:
             self.provider_combo.setCurrentText("Google Cloud Translation")
         elif settings.translation_provider.lower() in ["local", "local ai translator"]:
             self.provider_combo.setCurrentText("Local AI Translator")
@@ -290,19 +317,28 @@ class MainWindow(QMainWindow):
     def _on_provider_changed(self, provider_text: str):
         if provider_text == "OpenAI":
             self.openai_container.setVisible(True)
+            self.groq_container.setVisible(False)
+            self.local_container.setVisible(False)
+            self.google_container.setVisible(False)
+        elif provider_text == "Groq":
+            self.openai_container.setVisible(False)
+            self.groq_container.setVisible(True)
             self.local_container.setVisible(False)
             self.google_container.setVisible(False)
         elif provider_text == "Local AI Translator":
             self.openai_container.setVisible(False)
+            self.groq_container.setVisible(False)
             self.local_container.setVisible(True)
             self.google_container.setVisible(False)
             self._update_local_status()
         elif provider_text == "Google Cloud Translation":
             self.openai_container.setVisible(False)
+            self.groq_container.setVisible(False)
             self.local_container.setVisible(False)
             self.google_container.setVisible(True)
         else: # Mock Translator
             self.openai_container.setVisible(False)
+            self.groq_container.setVisible(False)
             self.local_container.setVisible(False)
             self.google_container.setVisible(False)
 
@@ -432,6 +468,18 @@ class MainWindow(QMainWindow):
             if not api_key:
                 QMessageBox.warning(self, "API Key Missing", "Please enter an OpenAI API key.")
                 return
+        elif provider_text == "Groq":
+            provider = "groq"
+            model_name = self.groq_model_combo.currentText()
+            groq_key = os.getenv("GROQ_API_KEY") or settings.groq_api_key
+            if not groq_key:
+                QMessageBox.warning(
+                    self,
+                    "GROQ_API_KEY Missing",
+                    "GROQ_API_KEY was not found.\n\nPlease add GROQ_API_KEY=... to the .env file."
+                )
+                return
+            api_key = groq_key
         elif provider_text == "Local AI Translator":
             provider = "local"
             model_name = settings.local_model
